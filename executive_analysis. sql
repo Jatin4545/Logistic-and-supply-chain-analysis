@@ -1,0 +1,142 @@
+/* =====================================================================================================
+   DASHBOARD 1 — EXECUTIVE / OPERATIONS OVERVIEW
+   EXPLORATORY ANALYSIS QUERIES
+
+   OBJECTIVE:
+   These queries are not the final dashboard views. They are exploratory analysis queries used to
+   understand the operational health of the trucking business before building the dashboard layer.
+
+   BUSINESS QUESTIONS COVERED:
+   1. What is the overall shipment volume and revenue generated?
+   2. What are the major operating cost buckets (fuel and maintenance)?
+   3. What is the overall delivery service level (on-time performance)?
+   4. How do revenue and shipment volumes trend month by month?
+   5. How does on-time delivery trend over time?
+   6. Are operating costs rising in line with revenue, or faster than revenue?
+
+   DASHBOARD USE:
+   The output of these queries helps validate KPI logic and identify the most relevant metrics
+   for the Executive Overview dashboard.
+===================================================================================================== */
+
+
+-- ============================================================================================
+-- 1) Overall business volume and revenue snapshot
+-- Purpose:
+-- Get the top-level shipment and revenue picture:
+-- total loads moved, total revenue earned, and average revenue generated per load.
+-- This acts as the baseline KPI check for the executive dashboard.
+-- ============================================================================================
+SELECT
+    COUNT(*) AS total_loads,
+    SUM(revenue) AS total_revenue,
+    ROUND(AVG(revenue), 2) AS avg_revenue_per_load
+FROM loads;
+
+
+-- ============================================================================================
+-- 2) Total operating cost snapshot
+-- Purpose:
+-- Measure the two biggest operating cost buckets at a company level:
+-- total fuel spend and total maintenance spend.
+-- This helps compare revenue generation against major cost drivers.
+-- ============================================================================================
+SELECT
+    (SELECT SUM(total_cost) FROM fuel_purchases) AS total_fuel_cost,
+    (SELECT SUM(total_cost) FROM maintenance_records) AS total_maintenance_cost;
+
+
+-- ============================================================================================
+-- 3) Overall on-time delivery %
+-- Purpose:
+-- Evaluate service performance by calculating the percentage of delivery events completed
+-- on or before the scheduled delivery time.
+-- This is one of the core service-level KPIs for the executive dashboard.
+-- ============================================================================================
+SELECT
+    ROUND(
+        100.0 * SUM(CASE WHEN actual_datetime <= scheduled_datetime THEN 1 ELSE 0 END)
+        / COUNT(*),
+        2
+    ) AS on_time_delivery_pct
+FROM delivery_events
+WHERE event_type = 'Delivery';
+
+
+-- ============================================================================================
+-- 4) Monthly revenue and shipment trend
+-- Purpose:
+-- Analyze how revenue and shipment volume change month by month.
+-- This helps identify seasonality, growth periods, slow months, and abnormal revenue drops.
+-- ============================================================================================
+SELECT
+    YEAR(load_date) AS year,
+    MONTH(load_date) AS month,
+    SUM(revenue) AS total_revenue,
+    COUNT(*) AS total_loads
+FROM loads
+GROUP BY YEAR(load_date), MONTH(load_date)
+ORDER BY year, month;
+
+
+-- ============================================================================================
+-- 5) Monthly on-time delivery trend
+-- Purpose:
+-- Track service reliability over time by measuring monthly on-time delivery percentage.
+-- Useful for spotting periods of operational disruption, seasonal service issues,
+-- or process improvement after corrective actions.
+-- ============================================================================================
+SELECT
+    YEAR(actual_datetime) AS year,
+    MONTH(actual_datetime) AS month,
+    ROUND(
+        100.0 * SUM(CASE WHEN actual_datetime <= scheduled_datetime THEN 1 ELSE 0 END)
+        / COUNT(*),
+        2
+    ) AS on_time_pct
+FROM delivery_events
+WHERE event_type = 'Delivery'
+GROUP BY YEAR(actual_datetime), MONTH(actual_datetime)
+ORDER BY year, month;
+
+
+-- ============================================================================================
+-- 6) Revenue vs fuel cost vs maintenance cost by year
+-- Purpose:
+-- Compare yearly revenue against the company’s two major operating cost components:
+-- fuel and maintenance.
+-- This helps answer whether cost growth is aligned with business growth
+-- or whether operating costs are increasing faster than revenue.
+-- ============================================================================================
+WITH revenue AS (
+    SELECT
+        YEAR(load_date) AS year,
+        SUM(revenue) AS total_revenue
+    FROM loads
+    GROUP BY YEAR(load_date)
+),
+fuel AS (
+    SELECT
+        YEAR(purchase_date) AS year,
+        SUM(total_cost) AS total_fuel_cost
+    FROM fuel_purchases
+    GROUP BY YEAR(purchase_date)
+),
+maint AS (
+    SELECT
+        YEAR(maintenance_date) AS year,
+        SUM(total_cost) AS total_maintenance_cost
+    FROM maintenance_records
+    GROUP BY YEAR(maintenance_date)
+)
+SELECT
+    COALESCE(r.year, f.year, m.year) AS year,
+    ISNULL(r.total_revenue, 0) AS total_revenue,
+    ISNULL(f.total_fuel_cost, 0) AS total_fuel_cost,
+    ISNULL(m.total_maintenance_cost, 0) AS total_maintenance_cost
+FROM revenue r
+FULL OUTER JOIN fuel f
+    ON r.year = f.year
+FULL OUTER JOIN maint m
+    ON COALESCE(r.year, f.year) = m.year
+ORDER BY year;
